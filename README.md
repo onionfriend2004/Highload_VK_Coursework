@@ -3,6 +3,7 @@
 [Задание](https://github.com/init/highload/blob/main/homework_architecture.md)
 
 Курсовая работа по дисциплине "Проектирование высоконагруженных систем"
+
 *Лупенков Алексей, осень 2025*
 
 
