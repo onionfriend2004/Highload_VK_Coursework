@@ -285,52 +285,88 @@ $$\frac{227701 \cdot 8}{86400} =  21 \space Гбит/с$$
 | Сидней         | 16.7 / 50.0  | 23.3 / 70.1          | 16.7 / 50.0      | 70.7 / 221.5  | 0.12 / 0.35       |
 ### Схема балансировки
 
-Сначала применяется DNS
+Применяется DNS
 
 #### Схема DNS-балансировки
 
-DNS-балансировка распределяет трафик между дата-центрами на основе местоположения пользователя:
+```mermaid
+flowchart LR
+    U[Пользователь] --> D[GeoDNS]
+    D -->|по региону / нагрузке| R1[Регион 1]
+    D -->|по региону / нагрузке| R2[Регион 2]
+    D -->|резерв| R3[Регион 3]
+    
+    subgraph "Регион 1"
+        R1 --> A1[Control-plane]
+    end
+    subgraph "Регион 2"
+        R2 --> A2[Control-plane]
+    end
+    subgraph "Регион 3 (Failover)"
+        R3 --> A3[Control-plane]
+    end
+```
 
-GeoDNS – определяет ближайший ЦОД и направляет запросы к нему (их может прийти несколько и тогда применяется уже Round-robin DNS).
-
-Round-robin DNS – равномерное распределение запросов между доступными узлами.
-
-Failover-механизм – при отказе одного из дата-центров трафик перенаправляется на резервные узлы.
-
-После этого применяется уже BGP Anycast для определения ДЦ на который нужно обратиться.
-
-#### Схема Anycast-балансировки
-
-Anycast позволяет оптимизировать маршрутизацию трафика за счет выбора ближайшего узла:
-
-Anycast IP – один IP-адрес, доступный из разных дата-центров.
-
-BGP-анонсирование – трафик направляется к ближайшему доступному узлу.
-
-Минимизация задержек – запросы обслуживаются ближайшим ЦОДом, что повышает скорость работы платформы.
-
+Geo-based DNS — направляет трафик в ближайший регион.
 
 ## 4. Локальная балансировка нагрузки
 
-### Схема балансировки нагрузки
+Классические L4/L7-балансировщики не подойдут для stateful видео-конференций, потому что:
 
-**Уровни и механизмы резервирования:**
+- соединения являются **long-lived** (часами), а стандартные LB рассчитаны на короткие HTTP-запросы;  
+- отсутствует интеграция с **room-registry** — готовый LB не знает `room_id → media_host` и может разбросать участников одной комнаты по разным SFU;  
+- многие медиапротоколы — **DTLS/SRTP/UDP** — требуют UDP-aware прокси с прозрачным connection tracking, чего обычные L7 LB не обеспечивают;  
+- стандартные health-checks (TCP/HTTP) не отражают real-time качество (packet loss, jitter, encoder health), поэтому LB может направлять трафик на деградированные инстансы;  
+- готовые LB не поддерживают гибкую политику миграции/грейсфул-дрен (переход комнат, graceful reconnect) и не интегрируются с автоскейлингом по медиаметрикам;  
 
-1. DNS / Anycast (глобальная).
-2. Edge / Regional L4 (TCP/UDP)
-* Любые UDP/DTLS/QUIC медиа-потоки.
-* Резервирование: активный/активный в нескольких AZ для минимизации потерь пакетов.
-* Healthchecks уровня L4 (TCP/UDP).
-3. Regional L7 (HTTPS) — SSL termination и reverse proxy (NGINX / Envoy)
-* SSL Termination.
-* Механизмы: keepalive, session resumption (TLS session tickets), OCSP stapling, TLS1.3.
-* Healthchecks HTTP(S), хелс-эндпоинты бэкендов, readiness/liveness.
-* Sticky sessions / session affinity — только при необходимости (signaling stateful services).
-4. Набор резервных механизмов
-* Active/Active между AZ (рекомендуется).
-* Failover: healthchecks → исключение узла из пула; Route53/GSLB или BGP-анонс для перенаправления.
-* Autoscaling на базе CPU/SSL handshake rate / queues.
+### Схема локальной балансировки нагрузки
 
+```mermaid
+flowchart TD
+    subgraph DC["Локальный дата-центр"]
+        direction TB
+        A["Ingress Gateway (SSL Termination)"]
+        B["Service Mesh"]
+        C["Media-plane (SFU)"]
+        A --> B
+        B --> C
+    end
+
+    D["Control-plane (Room Registry)"]
+    D -.-> A
+    D -.-> B
+    D -.-> C
+```
+
+1. Ingress Gateway получает от Control-plane адрес назначенного media-host.
+2. Ingress инициирует маршрутизацию/проксирование через Service Mesh.
+3. Cессия привязывается к выбранному media-host.
+4. Клиент устанавливает media-соединение (WebRTC/UDP) с media-host.
+5. Media-host подтверждает подключение, регистрирует участника в реестре комнат (`room_id → media_host`).
+6. Media-host начинает принимать/пересылать аудио/видео (SFU).
+7. Mesh выполняет health checks; при деградации помечает инстанс как unhealthy и исключает из LB.
+
+### Создание новой комнаты
+
+1. Клиент/сервер запрашивает создание комнаты у Control-plane.
+2. Control-plane выбирает media-host по load/policy, резервирует ресурсы.
+3. Control-plane записывает mapping `room_id → media_host` в реестр.
+4. Control-plane возвращает участникам адрес media-host и токен доступа.
+5. Участники подключаются к media-host через mesh/ingress.
+
+### Присоединение к существующей комнате
+
+1. Клиент запрашивает join у Control-plane с `room_id`.
+2. Control-plane читает `room_id → media_host` и возвращает адрес.
+3. Клиент подключается к media-host; connection tracking удерживает привязку.
+
+### Отказ и failover
+
+1. Mesh/ingress обнаруживают unhealthy.
+2. Control-plane помечает инстанс как down; обновляет реестр.
+3. Для новых подключений Control-plane выбирает альтернативный media-host.
+4. Для активных комнат: Control-plane либо инициирует миграцию (выбор target + уведомление участников о reconnect), либо переводит работу на резервные инстансы (в зависимости от реализации).
+5. Если весь регион упал — GeoDNS переключает на резервный регион; клиенты повторно подключаются к новым media-host’ам.
 
 
 **Формула резервирования оборудования:**
@@ -346,18 +382,11 @@ $$
 
 ### Расчет количества балансировщиков
 
-1. **SSL Termination** 
-* Каждый L7 балансировщик должен выдерживать расшифровку пикового трафика. 
-* Загрузка максимум на 80% от реальной мощности. 
-2. **Пропускная способность сети** 
-  * Расчет по пиковому RPS и среднему размеру запроса. 
-  * Пропускная способность одного балансировщика:
-
 $$
 \text{BW}_\text{балансировщика} = \text{RPS}_\text{пик} \times \text{размер запроса (ГБ)} \times 8\ (\text{Гбит/с})
 $$
 
-#### Результат L4
+#### Результат ingress
 
 Общий пиковый медиатрафик 5211 Gbit/s делим между DC пропорционально присоединениям.
 
@@ -366,11 +395,11 @@ $$
 Для каждого DC:
 1. Доля = `join_peak_DC / 6668`
 2. BW_med_DC = 5211 Gbit/s * доля
-3. N_L4_baseline = ceil(BW_med_DC / 80)  (80 Gbit/s effective на L4-инстанс)
-4. N_L4_reserve = ceil((N_baseline * 2) / (N_baseline + 1))
-5. N_L4_total = N_baseline + N_L4_reserve
+3. N_baseline = ceil(BW_med_DC / 80) 
+4. N_reserve = ceil((N_baseline * 2) / (N_baseline + 1))
+5. N_total = N_baseline + N_reserve
 
-| Дата-центр     | Присоединение (RPS) | L4 baseline (N) | L4 резерв | L4 всего |
+| Дата-центр     | Присоединение (RPS) | baseline (N) | резерв | всего |
 |----------------|----------------:|-----------------:|-----------:|---------:|
 | Сан-Франциско  | 883.4           |9                | 2          | **11**   |
 | Нью-Йорк       | 883.4           | 9                | 2          | **11**   |
@@ -385,9 +414,9 @@ $$
 | Рио-де-Жанейро | 798.5           |  8                | 2          | **10**   |
 | Сидней         | 221.5           | 3                | 2          | **5**    |
 
-**Итого (L4, все DC, по миру):**  
-* Baseline суммарно ≈ **70** L4-инстансов (сумма baseline по DC)  
-* С учетом резервов — суммарно ≈ **92** L4-инстанса
+**Итого:**  
+* Baseline суммарно ≈ **70** инстансов (сумма baseline по DC)  
+* С учетом резервов — суммарно ≈ **92** инстанса
 
 #### Результат L7
 
@@ -417,7 +446,103 @@ BW_{sig\_Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \appro
 
 ## 5. Логическая схема БД
 
-TODO
+```mermaid
+erDiagram
+    USERS {
+        uuid id PK
+        string username
+        string email
+        string password_hash
+        string avatar_url
+        datetime created_at
+    }
+
+    DEVICES {
+        uuid id PK
+        uuid user_id FK
+        string device_type
+        string os
+        datetime last_seen
+    }
+
+    ROOMS {
+        uuid id PK
+        string name
+        uuid owner_id FK
+        string region
+        string status
+        datetime created_at
+    }
+
+    ROOM_MEMBERS {
+        uuid room_id FK
+        uuid user_id FK
+        string role
+        datetime joined_at
+    }
+
+    MESSAGES {
+        uuid id PK
+        uuid room_id FK
+        uuid sender_id FK
+        string content
+        datetime sent_at
+    }
+
+    RECORDINGS {
+        uuid id PK
+        uuid room_id FK
+        string storage_path
+        int64 size_bytes
+        string format
+        datetime created_at
+    }
+
+    MEDIA_NODES {
+        uuid id PK
+        string region
+        string ip
+        string status
+        float cpu_load
+        float bandwidth_mbps
+        datetime last_heartbeat
+    }
+
+    ROOM_ASSIGNMENTS {
+        uuid room_id FK
+        uuid media_node_id FK
+        datetime assigned_at
+    }
+
+    CACHES {
+        string key PK
+        string value
+        datetime updated_at
+        string ttl_policy
+    }
+
+    FILES {
+        uuid id PK
+        uuid owner_id FK
+        string file_type
+        int64 size_bytes
+        string storage_path
+        datetime uploaded_at
+    }
+
+    USERS ||--o{ DEVICES : "1:N"
+    USERS ||--o{ ROOM_MEMBERS : "1:N"
+    USERS ||--o{ MESSAGES : "1:N"
+    USERS ||--o{ FILES : "1:N"
+
+    ROOMS ||--o{ ROOM_MEMBERS : "1:N"
+    ROOMS ||--o{ MESSAGES : "1:N"
+    ROOMS ||--o{ RECORDINGS : "1:N"
+    ROOMS ||--o{ ROOM_ASSIGNMENTS : "1:1"
+
+    MEDIA_NODES ||--o{ ROOM_ASSIGNMENTS : "1:N"
+```
+
 
 ## Источники
 1. https://www.demandsage.com/zoom-statistics/
