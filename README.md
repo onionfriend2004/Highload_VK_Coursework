@@ -420,9 +420,10 @@ $$
 
 #### Результат L7
 
-\[
+$$
 BW_{sig\_Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS_{peak} \times 8.192\cdot10^{-5}
-\]
+$$
+
 Один L7-инстанс (NIC 10G, U=80%) → eff = 8 Гбит/с.
 
 
