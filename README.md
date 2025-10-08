@@ -6,7 +6,6 @@
 
 *Лупенков Алексей, осень 2025*
 
-
 ## Содержание
 * [**1. Тема, аудитория, функционал**](#1-тема-аудитория-функционал)
 
@@ -17,6 +16,8 @@
 * [**4. Локальная балансировка нагрузки**](#4-локальная-балансировка-нагрузки)
 
 * [**5. Логическая схема БД**](#5-логическая-схема-бд)
+
+* [**6. Физическая схема БД**](#6-физическая-схема-бд)
 
 ## 1. Тема, аудитория, функционал
 
@@ -297,13 +298,13 @@ flowchart LR
     D -->|резерв| R3[Регион 3]
     
     subgraph "Регион 1"
-        R1 --> A1[Control-plane]
+        R1 --> A1[ingress]
     end
     subgraph "Регион 2"
-        R2 --> A2[Control-plane]
+        R2 --> A2[ingress]
     end
     subgraph "Регион 3 (Failover)"
-        R3 --> A3[Control-plane]
+        R3 --> A3[ingress]
     end
 ```
 
@@ -313,61 +314,75 @@ Geo-based DNS — направляет трафик в ближайший рег
 
 Классические L4/L7-балансировщики не подойдут для stateful видео-конференций, потому что:
 
-- соединения являются **long-lived** (часами), а стандартные LB рассчитаны на короткие HTTP-запросы;  
 - отсутствует интеграция с **room-registry** — готовый LB не знает `room_id → media_host` и может разбросать участников одной комнаты по разным SFU;  
 - многие медиапротоколы — **DTLS/SRTP/UDP** — требуют UDP-aware прокси с прозрачным connection tracking, чего обычные L7 LB не обеспечивают;  
 - стандартные health-checks (TCP/HTTP) не отражают real-time качество (packet loss, jitter, encoder health), поэтому LB может направлять трафик на деградированные инстансы;  
-- готовые LB не поддерживают гибкую политику миграции/грейсфул-дрен (переход комнат, graceful reconnect) и не интегрируются с автоскейлингом по медиаметрикам;  
+- готовые LB не поддерживают гибкую политику миграции (переход комнат, graceful reconnect);  
 
 ### Схема локальной балансировки нагрузки
 
 ```mermaid
-flowchart TD
-    subgraph DC["Локальный дата-центр"]
-        direction TB
-        A["Ingress Gateway (SSL Termination)"]
-        B["Service Mesh"]
-        C["Media-plane (SFU)"]
-        A --> B
-        B --> C
+flowchart LR
+    subgraph CLIENT["Клиент"]
+        U["Join Room (HTTPS/WSS)"]
     end
 
-    D["Control-plane (Room Registry)"]
-    D -.-> A
-    D -.-> B
-    D -.-> C
+    subgraph EDGE["Edge Layer"]
+        I["Ingress Gateway"]
+        D["GeoDNS"]
+    end
+
+    subgraph CONTROL["Control Plane"]
+        C["Room Registry / Load Manager"]
+    end
+
+    subgraph MEDIA["Media Layer (SFU)"]
+        M["Media Host"]
+        H["Service Mesh Health Monitor"]
+    end
+
+    %% Signaling path (HTTP/WSS)
+    U --> D --> I --> C
+    C --> I --> U
+
+    %% Media path (UDP/WebRTC)
+    U -. UDP/WebRTC .-> M
+
+    %% Control & health
+    M --> C
+    H --> C
+    C -.-> H
 ```
 
-1. Ingress Gateway получает от Control-plane адрес назначенного media-host.
-2. Ingress инициирует маршрутизацию/проксирование через Service Mesh.
-3. Cессия привязывается к выбранному media-host.
-4. Клиент устанавливает media-соединение (WebRTC/UDP) с media-host.
-5. Media-host подтверждает подключение, регистрирует участника в реестре комнат (`room_id → media_host`).
-6. Media-host начинает принимать/пересылать аудио/видео (SFU).
-7. Mesh выполняет health checks; при деградации помечает инстанс как unhealthy и исключает из LB.
+1. Клиент подключается к Ingress Gateway регионального дата-центра.  
+2. Ingress пересылает запрос в Control Plane этого региона.  
+3. Control Plane выбирает оптимальный media-host с учетом параметров загрузки, доступности и привязки комнаты (room affinity).  
+4. Control Plane возвращает Ingress-узлу адрес выбранного media-host.  
+5. Ingress возвращает клиенту адрес media-host.  
+6. Клиент устанавливает WebRTC/UDP соединение напрямую с media-host.  
+7. Media-host подтверждает соединение и регистрирует участника в реестре (room_id → media_host).
 
 ### Создание новой комнаты
 
-1. Клиент/сервер запрашивает создание комнаты у Control-plane.
-2. Control-plane выбирает media-host по load/policy, резервирует ресурсы.
-3. Control-plane записывает mapping `room_id → media_host` в реестр.
-4. Control-plane возвращает участникам адрес media-host и токен доступа.
-5. Участники подключаются к media-host через mesh/ingress.
+1. Клиент или сервер отправляет запрос на создание комнаты в Control Plane.  
+2. Control Plane выбирает media-host по текущей загрузке и политике размещения, резервирует ресурсы.  
+3. Control Plane записывает соответствие `room_id → media_host` в реестр.  
+4. Control Plane возвращает участникам адрес выбранного media-host и токен доступа.  
+5. Участники устанавливают соединение с media-host через Ingress или Mesh.
 
 ### Присоединение к существующей комнате
 
-1. Клиент запрашивает join у Control-plane с `room_id`.
-2. Control-plane читает `room_id → media_host` и возвращает адрес.
-3. Клиент подключается к media-host; connection tracking удерживает привязку.
+1. Клиент отправляет запрос на присоединение (join) в Control Plane с `room_id`.  
+2. Control Plane считывает из реестра соответствие `room_id → media_host` и возвращает адрес хоста.  
+3. Клиент подключается к media-host; механизм connection tracking удерживает привязку сессии к конкретному хосту.
 
 ### Отказ и failover
 
-1. Mesh/ingress обнаруживают unhealthy.
-2. Control-plane помечает инстанс как down; обновляет реестр.
-3. Для новых подключений Control-plane выбирает альтернативный media-host.
-4. Для активных комнат: Control-plane либо инициирует миграцию (выбор target + уведомление участников о reconnect), либо переводит работу на резервные инстансы (в зависимости от реализации).
-5. Если весь регион упал — GeoDNS переключает на резервный регион; клиенты повторно подключаются к новым media-host’ам.
-
+1. Mesh обнаруживает, что инстанс media-host стал unhealthy.  
+2. Control Plane помечает инстанс как недоступный и обновляет реестр.  
+3. Для новых подключений Control Plane выбирает альтернативный media-host.  
+4. Для активных комнат Control Plane инициирует миграцию — выбирает новый хост, уведомляет участников о reconnect или переводит комнату на резервный инстанс (в зависимости от реализации).  
+5. Если весь регион становится недоступным, GeoDNS переключает трафик на резервный регион; клиенты повторно подключаются к новым media-host'ам.
 
 **Формула резервирования оборудования:**
 
@@ -446,103 +461,73 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 
 ## 5. Логическая схема БД
 
-```mermaid
-erDiagram
-    USERS {
-        uuid id PK
-        string username
-        string email
-        string password_hash
-        string avatar_url
-        datetime created_at
-    }
+![db_diagram](pics/db_diagram.png)
 
-    DEVICES {
-        uuid id PK
-        uuid user_id FK
-        string device_type
-        string os
-        datetime last_seen
-    }
+Рассчитаем примерный необходимый объем памяти, для хранения каждой из сущностей:
 
-    ROOMS {
-        uuid id PK
-        string name
-        uuid owner_id FK
-        string region
-        string status
-        datetime created_at
-    }
+| Сущность                                        |                                                                                                                                                                  Формула (байт/строку) |                     Количество (строк) |                                              Итоговый объём |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | -------------------------------------: | ----------------------------------------------------------: |
+| **USERS** (metadata)                            | `16 (uuid - user_id) + 20 (text - username) + 40 (text - email) + 32 (bytea - password hash) + 8 (timestamp - created_at) + 8 (timestamp - updated_at)` = **124 байта / пользователь** |                    `700 000 000` (MAU) | **86.80 Гбайт** = `124 · 700 000 000 = 86 800 000 000 байт` |
+| **MEETINGS** (metadata, в день)                 |                                                         `16 (uuid - meeting_id) + 16 (uuid - host_id) + 60 (text - meeting_url) + 8 + 8 + 8 + 8 (timestamps)` = **124 байта / строка** |                     `16 742 770 /день` |                **2.08 Гбайт / день** = `2 076 103 480 байт` |
+| **PARTICIPANTS** (history, в день)              |                              `16 (uuid - participant_id) + 16 (uuid - user_id) + 16 (uuid - meeting_id) + 8 (timestamp - joined_at) + 8 (timestamp - left_at)` = **64 байта / строка** |                    `167 427 700 /день` |              **10.72 Гбайт / день** = `10 715 372 800 байт` |
+| **MESSAGES** (чат, в день)                      |                                          `16 (uuid - message_id) + 16 (uuid - user_id) + 16 (uuid - meeting_id) + 150 (text - content avg) + 8 (timestamp)` = **206 байт / сообщение** |                     `83 713 850 /день` |              **17.25 Гбайт / день** = `17 245 053 100 байт` |
+| **RECORDINGS (metadata, в день)**               |                                                        `16 (uuid - recording_id) + 16 (uuid - meeting_id) + 60 (text - file_url) + 8 (timestamp - created_at)` = **100 байт / строка** |                        `227 701 /день` |                  **22.77 Мбайт / день** = `22 770 100 байт` |
+| **ANALYTICS** (events, в день)                  |                                                                       `16 (uuid - event_id) + 16 (uuid - meeting_id) + 20 (text - event_type) + 8 (timestamp)` = **60 байт / событие** |                     `83 713 850 /день` |                **5.02 Гбайт / день** = `5 022 831 000 байт` |
+| **SESSIONS** (active, Redis)                    |                                                            `16 (uuid - user_id) + 32 (text - token) + 8 (timestamp - expires_at) + 8 (timestamp - created_at)` = **64 байта / сессия** | `600 000 000` (предположение: DAU * 2) |                     **38.40 Гбайт** = `38 400 000 000 байт` |
+| **ROOM_REGISTRY** (in-memory, concurrent rooms) |   `16 (uuid - room_id) + 16 (uuid - meeting_id) + 50 (text - media_host) + 4 (int - participant_count) + 10 (text - status) + 8 (timestamp - last_heartbeat)` = **104 байта / запись** |   `~627 854` (оценка concurrent rooms) |                        **65.30 Мбайт** = `65 296 803 байта` |
 
-    ROOM_MEMBERS {
-        uuid room_id FK
-        uuid user_id FK
-        string role
-        datetime joined_at
-    }
 
-    MESSAGES {
-        uuid id PK
-        uuid room_id FK
-        uuid sender_id FK
-        string content
-        datetime sent_at
-    }
+### RPS / QPS
+| Действие / таблица                 |                                     Avg W/s |              Peak W/s |
+| ---------------------------------- | ------------------------------------------: | --------------------: |
+| Создание **MEETINGS**              |    `16 742 770 / 86 400 ≈ 193.78 записей/с` |   `~581.35 записей/с` |
+| Join → **PARTICIPANTS** (write)    | `167 427 700 / 86 400 ≈ 1 937.82 записей/с` | `~5 813.46 записей/с` |
+| Chat → **MESSAGES** (write)        |    `83 713 850 / 86 400 ≈ 968.91 записей/с` | `~2 906.73 записей/с` |
+| Запись metadata → **RECORDINGS**   |         `227 701 / 86 400 ≈ 2.64 записей/с` |     `~7.91 записей/с` |
+| Analytics → **ANALYTICS** (events) |    `83 713 850 / 86 400 ≈ 968.91 записей/с` | `~2 906.73 записей/с` |
 
-    RECORDINGS {
-        uuid id PK
-        uuid room_id FK
-        string storage_path
-        int64 size_bytes
-        string format
-        datetime created_at
-    }
 
-    MEDIA_NODES {
-        uuid id PK
-        string region
-        string ip
-        string status
-        float cpu_load
-        float bandwidth_mbps
-        datetime last_heartbeat
-    }
+### Резюме
 
-    ROOM_ASSIGNMENTS {
-        uuid room_id FK
-        uuid media_node_id FK
-        datetime assigned_at
-    }
+| Таблица / сущность                       |         Оценочный объём |
+| ---------------------------------------- | ----------------------: |
+| **USERS** (metadata)                     |         **86.80 Гбайт** |
+| **MEETINGS** (metadata, в день)          |   **2.08 Гбайт / день** |
+| **PARTICIPANTS** (rows, в день)          |  **10.72 Гбайт / день** |
+| **MESSAGES** (чат, в день)               |  **17.25 Гбайт / день** |
+| **RECORDINGS** (metadata, в день)        |  **22.77 Мбайт / день** |
+| **ANALYTICS** (events, в день)           |   **5.02 Гбайт / день** |
+| **SESSIONS** (active, Redis)             |         **38.40 Гбайт** |
+| **ROOM_REGISTRY** (in-memory concurrent) |         **65.30 Мбайт** |
 
-    CACHES {
-        string key PK
-        string value
-        datetime updated_at
-        string ttl_policy
-    }
+### Описание сущностей базы данных
 
-    FILES {
-        uuid id PK
-        uuid owner_id FK
-        string file_type
-        int64 size_bytes
-        string storage_path
-        datetime uploaded_at
-    }
+| Сущность | Описание |
+|-----------|-----------|
+| **USERS** | Информация о пользователях сервиса. Содержит технические данные (идентификатор, email, пароль) и метаданные (username, даты создания и обновления). Используется для аутентификации, идентификации и связи с другими таблицами. |
+| **MEETINGS** | Данные о встречах (видеоконференциях). Содержит информацию о ведущем (`host_id`), ссылку на встречу (`meeting_url`), время начала и окончания. Используется для планирования и управления видеовстречами. |
+| **PARTICIPANTS** | Таблица участников встреч. Фиксирует, какой пользователь участвовал в какой встрече, а также время подключения (`joined_at`) и выхода (`left_at`). Нужна для аналитики, подсчёта участников и истории подключений. |
+| **MESSAGES** | Сообщения, отправленные участниками во время встречи. Содержит текст (`content`), отправителя (`user_id`), встречу (`meeting_id`) и время отправки (`timestamp`). Используется для отображения чата конференции и анализа коммуникаций. |
+| **RECORDINGS** | Записи видеовстреч. Хранит ссылку на файл (`file_url`), дату создания (`created_at`) и связь с конкретной встречей (`meeting_id`). Используется для хранения и последующего просмотра прошедших встреч. |
+| **ANALYTICS** | Таблица аналитических событий, связанных с проведением встреч. Фиксирует тип события (`event_type`, например *join*, *leave*, *message_sent*), время (`timestamp`) и встречу (`meeting_id`). Применяется для сбора метрик и анализа активности участников. |
+| **SESSIONS** | Хранит активные сессии/токены пользователей: `user_id`, `token`, `expires_at`, `created_at`. Используется для быстрой проверки авторизации (lookup по токену) и инвалидации сессий.|
+| **ROOM_REGISTRY** | In-memory реестр соответствий `meeting_id, media_host` `participant_count, status, last_heartbeat`. Используется control-plane/edge для маршрутизации медиапутей (чтобы ingress возвращал адрес нужного SFU).|
 
-    USERS ||--o{ DEVICES : "1:N"
-    USERS ||--o{ ROOM_MEMBERS : "1:N"
-    USERS ||--o{ MESSAGES : "1:N"
-    USERS ||--o{ FILES : "1:N"
+| Таблица           | Консистентность | Комментарий                                              |
+| ----------------- | --------------- | -------------------------------------------------------- |
+| **USERS**         | **strong**      | регистрация, вход, проверка email                        |
+| **MEETINGS**      | **strong**      | создание и завершение встреч                             |
+| **PARTICIPANTS**  | ?    | запись истории подключений            |
+| **MESSAGES**      | ?    | доставка сообщений синхронна, запись может быть отложена |
+| **RECORDINGS**    | **strong**      | метаданные и blob должны быть синхронизированы           |
+| **ANALYTICS**     | **eventual**    | поступает из асинхронного стрима                         |
+| **SESSIONS**      | **strong**      | revoke / logout требуют мгновенной консистентности       |
+| **ROOM_REGISTRY** | **near-strong** | обновление TTL/heartbeat должно быть корректным          |
 
-    ROOMS ||--o{ ROOM_MEMBERS : "1:N"
-    ROOMS ||--o{ MESSAGES : "1:N"
-    ROOMS ||--o{ RECORDINGS : "1:N"
-    ROOMS ||--o{ ROOM_ASSIGNMENTS : "1:1"
 
-    MEDIA_NODES ||--o{ ROOM_ASSIGNMENTS : "1:N"
-```
+## 6. Физическая схема БД
 
+TODO
 
 ## Источники
 1. https://www.demandsage.com/zoom-statistics/
