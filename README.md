@@ -356,7 +356,7 @@ flowchart LR
 
 1. Клиент подключается к Ingress Gateway регионального дата-центра.  
 2. Ingress пересылает запрос в Control Plane этого региона.  
-3. Control Plane выбирает оптимальный media-host с учетом параметров загрузки, доступности и привязки комнаты (room affinity).  
+3. Control Plane выбирает оптимальный media-host с учетом параметров загрузки, доступности и привязки комнаты.  
 4. Control Plane возвращает Ingress-узлу адрес выбранного media-host.  
 5. Ingress возвращает клиенту адрес media-host.  
 6. Клиент устанавливает WebRTC/UDP соединение напрямую с media-host.  
@@ -368,7 +368,7 @@ flowchart LR
 2. Control Plane выбирает media-host по текущей загрузке и политике размещения, резервирует ресурсы.  
 3. Control Plane записывает соответствие `room_id → media_host` в реестр.  
 4. Control Plane возвращает участникам адрес выбранного media-host и токен доступа.  
-5. Участники устанавливают соединение с media-host через Ingress или Mesh.
+5. Участники устанавливают соединение с media-host через Ingress.
 
 ### Присоединение к существующей комнате
 
@@ -467,14 +467,14 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 
 | Сущность                                        |                                                                                                                                                                  Формула (байт/строку) |                     Количество (строк) |                                              Итоговый объём |
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | -------------------------------------: | ----------------------------------------------------------: |
-| **USERS** (metadata)                            | `16 (uuid - user_id) + 20 (text - username) + 40 (text - email) + 32 (bytea - password hash) + 8 (timestamp - created_at) + 8 (timestamp - updated_at)` = **124 байта / пользователь** |                    `700 000 000` (MAU) | **86.80 Гбайт** = `124 · 700 000 000 = 86 800 000 000 байт` |
-| **MEETINGS** (metadata, в день)                 |                                                         `16 (uuid - meeting_id) + 16 (uuid - host_id) + 60 (text - meeting_url) + 8 + 8 + 8 + 8 (timestamps)` = **124 байта / строка** |                     `16 742 770 /день` |                **2.08 Гбайт / день** = `2 076 103 480 байт` |
-| **PARTICIPANTS** (history, в день)              |                              `16 (uuid - participant_id) + 16 (uuid - user_id) + 16 (uuid - meeting_id) + 8 (timestamp - joined_at) + 8 (timestamp - left_at)` = **64 байта / строка** |                    `167 427 700 /день` |              **10.72 Гбайт / день** = `10 715 372 800 байт` |
-| **MESSAGES** (чат, в день)                      |                                          `16 (uuid - message_id) + 16 (uuid - user_id) + 16 (uuid - meeting_id) + 150 (text - content avg) + 8 (timestamp)` = **206 байт / сообщение** |                     `83 713 850 /день` |              **17.25 Гбайт / день** = `17 245 053 100 байт` |
-| **RECORDINGS (metadata, в день)**               |                                                        `16 (uuid - recording_id) + 16 (uuid - meeting_id) + 60 (text - file_url) + 8 (timestamp - created_at)` = **100 байт / строка** |                        `227 701 /день` |                  **22.77 Мбайт / день** = `22 770 100 байт` |
-| **ANALYTICS** (events, в день)                  |                                                                       `16 (uuid - event_id) + 16 (uuid - meeting_id) + 20 (text - event_type) + 8 (timestamp)` = **60 байт / событие** |                     `83 713 850 /день` |                **5.02 Гбайт / день** = `5 022 831 000 байт` |
-| **SESSIONS** (active, Redis)                    |                                                            `16 (uuid - user_id) + 32 (text - token) + 8 (timestamp - expires_at) + 8 (timestamp - created_at)` = **64 байта / сессия** | `600 000 000` (предположение: DAU * 2) |                     **38.40 Гбайт** = `38 400 000 000 байт` |
-| **ROOM_REGISTRY** (in-memory, concurrent rooms) |   `16 (uuid - room_id) + 16 (uuid - meeting_id) + 50 (text - media_host) + 4 (int - participant_count) + 10 (text - status) + 8 (timestamp - last_heartbeat)` = **104 байта / запись** |   `~627 854` (оценка concurrent rooms) |                        **65.30 Мбайт** = `65 296 803 байта` |
+| **USERS** (metadata)                            | `16 (uuid - user_id) + 20 (text - username) + 40 (text - email) + 32 (bytea - password hash) + 8 (timestamp - created_at) + 8 (timestamp - updated_at)` = **124 байта / пользователь** |                    `700 000 000` (MAU) | **86.80 Гбайт** |
+| **MEETINGS** (metadata, в день)                 |                                                         `16 (uuid - meeting_id) + 16 (uuid - host_id) + 60 (text - meeting_url) + 8 + 8 + 8 + 8 (timestamps)` = **124 байта / строка** |                     `16 742 770 /день` |                **2.08 Гбайт / день** |
+| **PARTICIPANTS** (history, в день)              |                              `16 (uuid - participant_id) + 16 (uuid - user_id) + 16 (uuid - meeting_id) + 8 (timestamp - joined_at) + 8 (timestamp - left_at)` = **64 байта / строка** |                    `167 427 700 /день` |              **10.72 Гбайт / день** |
+| **MESSAGES** (чат, в день)                      |                                          `16 (uuid - message_id) + 16 (uuid - user_id) + 16 (uuid - meeting_id) + 150 (text - content avg) + 8 (timestamp)` = **206 байт / сообщение** |                     `83 713 850 /день` |              **17.25 Гбайт / день** |
+| **RECORDINGS (metadata, в день)**               |                                                        `16 (uuid - recording_id) + 16 (uuid - meeting_id) + 60 (text - file_url) + 8 (timestamp - created_at)` = **100 байт / строка** |                        `227 701 /день` |                  **22.77 Мбайт / день** |
+| **ANALYTICS** (events, в день)                  |                                                                       `16 (uuid - event_id) + 16 (uuid - meeting_id) + 20 (text - event_type) + 8 (timestamp)` = **60 байт / событие** |                     `83 713 850 /день` |                **5.02 Гбайт / день** |
+| **SESSIONS** (active, Redis)                    |                                                            `16 (uuid - user_id) + 32 (text - token) + 8 (timestamp - expires_at) + 8 (timestamp - created_at)` = **64 байта / сессия** | `600 000 000` (предположение: DAU * 2) |                     **38.40 Гбайт** |
+| **ROOM_REGISTRY** (in-memory, concurrent rooms) |   `16 (uuid - room_id) + 16 (uuid - meeting_id) + 50 (text - media_host) + 4 (int - participant_count) + 10 (text - status) + 8 (timestamp - last_heartbeat)` = **104 байта / запись** |   `~627 854` (оценка concurrent rooms) |                        **65.30 Мбайт** |
 
 
 ### RPS / QPS
