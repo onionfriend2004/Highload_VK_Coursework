@@ -513,16 +513,16 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 | **SESSIONS** | Хранит активные сессии/токены пользователей: `user_id`, `token`, `expires_at`, `created_at`. Используется для быстрой проверки авторизации (lookup по токену) и инвалидации сессий.|
 | **ROOM_REGISTRY** | In-memory реестр соответствий `meeting_id, media_host` `participant_count, status, last_heartbeat`. Используется control-plane/edge для маршрутизации медиапутей (чтобы ingress возвращал адрес нужного SFU).|
 
-| Таблица           | Консистентность | Комментарий                                              |
-| ----------------- | --------------- | -------------------------------------------------------- |
-| **USERS**         | **strong**      | регистрация, вход, проверка email                        |
-| **MEETINGS**      | **strong**      | создание и завершение встреч                             |
-| **PARTICIPANTS**  | ?    | запись истории подключений            |
-| **MESSAGES**      | ?    | доставка сообщений синхронна, запись может быть отложена |
-| **RECORDINGS**    | **strong**      | метаданные и blob должны быть синхронизированы           |
-| **ANALYTICS**     | **eventual**    | поступает из асинхронного стрима                         |
-| **SESSIONS**      | **strong**      | revoke / logout требуют мгновенной консистентности       |
-| **ROOM_REGISTRY** | **near-strong** | обновление TTL/heartbeat должно быть корректным          |
+| Таблица           | Консистентность |
+| ----------------- | --------------- | 
+| **USERS**         | **strong**      |
+| **MEETINGS**      | **strong**      |
+| **PARTICIPANTS**  | ?    |
+| **MESSAGES**      | ?    | 
+| **RECORDINGS**    | **strong**      | 
+| **ANALYTICS**     | **eventual**    |
+| **SESSIONS**      | **strong**      |
+| **ROOM_REGISTRY** | **near-strong** |
 
 
 ## 6. Физическая схема БД
