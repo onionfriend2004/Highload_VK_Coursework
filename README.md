@@ -522,7 +522,7 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 | **RECORDINGS**    | **strong**      | 
 | **ANALYTICS**     | **eventual**    |
 | **SESSIONS**      | **strong**      |
-| **ROOM_REGISTRY** | **near-strong** |
+| **ROOM_REGISTRY** | **strong** |
 
 
 ## 6. Физическая схема БД
