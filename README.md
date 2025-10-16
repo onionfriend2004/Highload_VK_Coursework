@@ -19,6 +19,8 @@
 
 * [**6. Физическая схема БД**](#6-физическая-схема-бд)
 
+* [**7. Алгоритмы**](#7-алгоритмы)
+
 ## 1. Тема, аудитория, функционал
 
 ### Тема
@@ -65,7 +67,7 @@ Zoom - сервис для видеоконференций
     * Размер аватарки за 400×400 пикселей в формате jpeg
     * Имя пользователя максимум может содержать 20 символов UTF-8
     * Информация о пользователе может содержать максимум 500 символов UTF-8.
-    * 1 час видео в формате HD занимает примерно 1 Гб (TODO: оценить по лекциям в zoom)
+    * 1 час видео в формате HD занимает примерно 1 Гб
     * Пользователь входит  раз в месяц
     * 1 пользователь отправляет 0.5 сообщений за конференцию
     * В 1 конференции чат содержит в среднем 150 символов
@@ -289,6 +291,7 @@ $$\frac{227701 \cdot 8}{86400} =  21 \space Гбит/с$$
 Применяется DNS
 
 #### Схема DNS-балансировки
+1. Управляющие
 
 ```mermaid
 flowchart LR
@@ -296,15 +299,54 @@ flowchart LR
     D -->|по региону / нагрузке| R1[Регион 1]
     D -->|по региону / нагрузке| R2[Регион 2]
     D -->|резерв| R3[Регион 3]
-    
+
+    %% Регион 1
     subgraph "Регион 1"
-        R1 --> A1[ingress]
+        R1 --> LB1[L7 Балансировщик]
+        LB1 --> P1[БД]
     end
+
+    %% Регион 2
     subgraph "Регион 2"
-        R2 --> A2[ingress]
+        R2 --> LB2[L7 Балансировщик]
+        LB2 --> P2[БД]
     end
+
+    %% Регион 3 (Failover)
     subgraph "Регион 3 (Failover)"
-        R3 --> A3[ingress]
+        R3 --> LB3[L7 Балансировщик]
+        LB3 --> P3[БД]
+    end
+```
+
+2. Медиа хосты
+
+```mermaid
+flowchart LR
+    U[Пользователь] --> D[GeoDNS]
+    D -->|по региону / нагрузке| R1[Регион 1]
+    D -->|по региону / нагрузке| R2[Регион 2]
+    D -->|резерв| R3[Регион 3]
+
+    %% Регион 1
+    subgraph "Регион 1"
+        R1 --> In1[ingress]
+        In1 --> CP1[Control Plane: Auth / Metadata / Scheduling]
+        In1 --> Media1[Media Requests → Media Servers]
+    end
+
+    %% Регион 2
+    subgraph "Регион 2"
+        R2 --> In2[ingress]
+        In2 --> CP2[Control Plane: Auth / Metadata / Scheduling]
+        In2 --> Media2[Media Requests → Media Servers]
+    end
+
+    %% Регион 3 (Failover)
+    subgraph "Регион 3 (Failover)"
+        R3 --> In3[ingress]
+        In3 --> CP3[Control Plane: Auth / Metadata / Scheduling]
+        In3 --> Media3[Media Requests → Media Servers]
     end
 ```
 
@@ -467,25 +509,25 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 
 | Сущность                                        |                                                                                                                                                                  Формула (байт/строку) |                     Количество (строк) |                                              Итоговый объём |
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | -------------------------------------: | ----------------------------------------------------------: |
-| **USERS** (metadata)                            | `16 (uuid - user_id) + 20 (text - username) + 40 (text - email) + 32 (bytea - password hash) + 8 (timestamp - created_at) + 8 (timestamp - updated_at)` = **124 байта / пользователь** |                    `700 000 000` (MAU) | **86.80 Гбайт** |
-| **MEETINGS** (metadata, в день)                 |                                                         `16 (uuid - meeting_id) + 16 (uuid - host_id) + 60 (text - meeting_url) + 8 + 8 + 8 + 8 (timestamps)` = **124 байта / строка** |                     `16 742 770 /день` |                **2.08 Гбайт / день** |
-| **PARTICIPANTS** (history, в день)              |                              `16 (uuid - participant_id) + 16 (uuid - user_id) + 16 (uuid - meeting_id) + 8 (timestamp - joined_at) + 8 (timestamp - left_at)` = **64 байта / строка** |                    `167 427 700 /день` |              **10.72 Гбайт / день** |
-| **MESSAGES** (чат, в день)                      |                                          `16 (uuid - message_id) + 16 (uuid - user_id) + 16 (uuid - meeting_id) + 150 (text - content avg) + 8 (timestamp)` = **206 байт / сообщение** |                     `83 713 850 /день` |              **17.25 Гбайт / день** |
-| **RECORDINGS (metadata, в день)**               |                                                        `16 (uuid - recording_id) + 16 (uuid - meeting_id) + 60 (text - file_url) + 8 (timestamp - created_at)` = **100 байт / строка** |                        `227 701 /день` |                  **22.77 Мбайт / день** |
-| **ANALYTICS** (events, в день)                  |                                                                       `16 (uuid - event_id) + 16 (uuid - meeting_id) + 20 (text - event_type) + 8 (timestamp)` = **60 байт / событие** |                     `83 713 850 /день` |                **5.02 Гбайт / день** |
-| **SESSIONS** (active, Redis)                    |                                                            `16 (uuid - user_id) + 32 (text - token) + 8 (timestamp - expires_at) + 8 (timestamp - created_at)` = **64 байта / сессия** | `600 000 000` (предположение: DAU * 2) |                     **38.40 Гбайт** |
-| **ROOM_REGISTRY** (in-memory, concurrent rooms) |   `16 (uuid - room_id) + 16 (uuid - meeting_id) + 50 (text - media_host) + 4 (int - participant_count) + 10 (text - status) + 8 (timestamp - last_heartbeat)` = **104 байта / запись** |   `~627 854` (оценка concurrent rooms) |                        **65.30 Мбайт** |
+| **USERS**                             | `16 (uuid - user_id) + 20 (text - username) + 40 (text - email) + 32 (bytea - password hash) + 8 (timestamp - created_at) + 8 (timestamp - updated_at)` = **124 байта / пользователь** |                    `700 000 000` (MAU) | **86.80 Гбайт** |
+| **MEETINGS**                  |                                                         `16 (uuid - meeting_id) + 16 (uuid - host_id) + 60 (text - meeting_url) + 8 + 8 + 8 + 8 (timestamps)` = **124 байта / строка** |                     `16 742 770 /день` |  **3.80 ТБ**          (2.08 Гбайт / день)  |
+| **PARTICIPANTS**               |                              `16 (uuid - participant_id) + 16 (uuid - user_id) + 16 (uuid - meeting_id) + 8 (timestamp - joined_at) + 8 (timestamp - left_at)` = **64 байта / строка** |                    `167 427 700 /день` |             **19.56 ТБ** (10.72 Гбайт / день) |
+| **MESSAGES**                       |                                          `16 (uuid - message_id) + 16 (uuid - user_id) + 16 (uuid - meeting_id) + 150 (text - content avg) + 8 (timestamp)` = **206 байт / сообщение** |                     `83 713 850 /день` |              **31.51 ТБ**(17.25 Гбайт / день) |
+| **RECORDINGS **               |                                                        `16 (uuid - recording_id) + 16 (uuid - meeting_id) + 60 (text - file_url) + 8 (timestamp - created_at)` = **100 байт / строка** |                        `227 701 /день` |                 **41.5 ГБ** (22.77 Мбайт / день) |
+| **ANALYTICS**                   |                                                                       `16 (uuid - event_id) + 16 (uuid - meeting_id) + 20 (text - event_type) + 8 (timestamp)` = **60 байт / событие** |                     `83 713 850 /день` |                **9.16 ТБ** (5.02 Гбайт / день) |
+| **SESSIONS**                     |                                                            `16 (uuid - user_id) + 32 (text - token) + 8 (timestamp - expires_at) + 8 (timestamp - created_at)` = **64 байта / сессия** | `600 000 000` (предположение: DAU * 2) |                     **38.40 Гбайт** |
+| **ROOM_REGISTRIES**  |   `16 (uuid - room_id) + 16 (uuid - meeting_id) + 50 (text - media_host) + 4 (int - participant_count) + 10 (text - status) + 8 (timestamp - last_heartbeat)` = **104 байта / запись** |   `~627 854` (оценка concurrent rooms) |                        **65.30 Мбайт** |
 
 
 ### RPS / QPS
-| Действие / таблица                 |                                     Avg W/s |              Peak W/s |
-| ---------------------------------- | ------------------------------------------: | --------------------: |
-| Создание **MEETINGS**              |    `16 742 770 / 86 400 ≈ 193.78 записей/с` |   `~581.35 записей/с` |
-| Join → **PARTICIPANTS** (write)    | `167 427 700 / 86 400 ≈ 1 937.82 записей/с` | `~5 813.46 записей/с` |
-| Chat → **MESSAGES** (write)        |    `83 713 850 / 86 400 ≈ 968.91 записей/с` | `~2 906.73 записей/с` |
-| Запись metadata → **RECORDINGS**   |         `227 701 / 86 400 ≈ 2.64 записей/с` |     `~7.91 записей/с` |
-| Analytics → **ANALYTICS** (events) |    `83 713 850 / 86 400 ≈ 968.91 записей/с` | `~2 906.73 записей/с` |
-
+| Действие / таблица                 |  Avg W/s | Peak W/s |
+| ---------------------------------- | -------: | -------: |
+| Создание **MEETINGS**              |   193.78 |   581.35 |
+| Join → **PARTICIPANTS** Чтение     | 1 937.82 | 5 813.46 |
+| Join → **PARTICIPANTS** Чтение     | 1 937.82 | 5 813.46 |
+| Chat → **MESSAGES** Запись         |   968.91 | 2 906.73 |
+| Запись metadata → **RECORDINGS**   |     2.64 |     7.91 |
+| Analytics → **ANALYTICS**  events  |   968.91 | 2 906.73 |
 
 ### Резюме
 
@@ -498,7 +540,7 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 | **RECORDINGS**       |  **22.77 Мбайт / день** |
 | **ANALYTICS**           |   **5.02 Гбайт / день** |
 | **SESSIONS**             |         **38.40 Гбайт** |
-| **ROOM_REGISTRY**  |         **65.30 Мбайт** |
+| **ROOM_REGISTRIES**  |         **65.30 Мбайт** |
 
 ### Описание сущностей базы данных
 
@@ -517,15 +559,119 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 | ----------------- | --------------- | 
 | **USERS**         | **strong**      |
 | **MEETINGS**      | **strong**      |
-| **PARTICIPANTS**  | ?    |
-| **MESSAGES**      | ?    | 
-| **RECORDINGS**    | **strong**      | 
+| **PARTICIPANTS**  | **eventual**    |
+| **MESSAGES**      | **eventual**    | 
+| **RECORDINGS**    | **eventual**    | 
 | **ANALYTICS**     | **eventual**    |
 | **SESSIONS**      | **strong**      |
-| **ROOM_REGISTRY** | **strong** |
+| **ROOM_REGISTRIES** | **strong**      |
 
 
 ## 6. Физическая схема БД
+
+![db_diagram](pics/db_diagram.png)
+
+| Сущность            | Хранилище                   | Обоснование выбора                                                                                                                                                         |
+| ------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **USERS**           | PostgreSQL                  | Требуется строгая согласованность, транзакции и поддержка внешних ключей. Основная нагрузка — чтение профилей.              |
+| **MEETINGS**        | PostgreSQL                  | Данные встреч требуют strong consistency. Диапазонное шардирование по дате позволяет архивировать старые встречи.                  |
+| **RECORDINGS** | Aerospike | Метаданные о записях (ссылка на файл, идентификатор встречи) не требуют мгновенной строгой согласованности, поэтому используется eventual consistency для ускорения доступа. Основные файлы хранятся в объектном хранилище (S3).  |
+| **PARTICIPANTS**    | Aerospike                   | Тысячи записей в секунду требуют низкой задержки и масштабируемости. Aerospike обеспечивает горизонтальное масштабирование и высокую доступность. |
+| **MESSAGES**        | Aerospike                   | Высокая скорость вставок и чтений, масштабируемость по chat_id.                                              |
+| **ANALYTICS**       | Kafka → ClickHouse | Kafka обеспечивает доставку событий, ClickHouse — быстрые запросы для дашбордов и KPI.  |
+| **SESSIONS**        | Redis                       | Высокопроизводительное in-memory хранилище для хранения токенов с TTL. Redis Sentinel обеспечивает failover.                                     |
+| **ROOM_REGISTRIES** | Etcd                        | Контролируемый реестр для маршрутизации медиапотоков. Strong consistency критична, Raft обеспечивает согласованность между нодами.                                         |
+
+### Индексирование
+
+- **PostgreSQL (USERS, MEETINGS, RECORDINGS)**
+  - Primary key (по умолчанию).
+  - Частые фильтры/поиски:
+    - `email` (UNIQUE).
+    - `created_at`, `start_time` — `brin` для очень больших таблиц с временной корреляцией.
+  - Составные индексы:
+    - `(meeting_id, created_at)` для быстрых выборок событий по встрече и времени.
+
+- **Aerospike (MESSAGES, PARTICIPANTS, RECORDINGS)**
+  - Primary key (по умолчанию).
+  - Secondary index (SI) для поиска по `user_id`, `timestamp` (если требуется range-lookup по времени).
+
+### Шардирование
+
+- **PostgreSQL**
+  - Вертикальное разделение: критичные транзакционные таблицы в PG.
+  - Горизонтальное (при необходимости): `user_id` / `meeting_id` — хэширование; или Citus для автоматического распределения.
+  - Временные таблицы: partition by `created_at` (range) для MEETINGS, упрощает архивирование.
+
+- **Redis**
+  - Redis Cluster — hash slots (16384 slots), распределяются между нодами.
+  - Для сессий — consistent hashing по `user_id` или token.
+
+- **ClickHouse**
+  - Partition by `event_date`, распределение по `meeting_id` (shard key) через `Distributed` таблицы.
+
+- **Kafka**
+  - Партиционирование по `meeting_id`/`tenant_id` для порядка сообщений внутри пары (partition).
+
+
+### Реплицирование
+
+- **PostgreSQL**
+  - Primary → replica (streaming replication). 1 master, 4 реплики.
+
+- **Redis**
+  - Master + replicas (Redis Sentinel).
+
+- **ClickHouse**
+  - `ReplicatedMergeTree` — репликация на уровне партиций/таблиц;
+
+- **Kafka**
+  - Репликация партиций между брокерами; `replication.factor >= 2`
+  
+- **Etcd**
+  - Raft-репликация; 11 (нечетное число) реплик всего, в каждый медиахост по 1.
+
+### Схема резервного копирования
+
+- **PostgreSQL**
+  - Полные бэкапы: `pg_basebackup` (ежедневно).
+  - WAL-архивирование для PITR (Point-In-Time Recovery) — хранение WAL в S3.
+  - Retention: ежедневные full (14d), инкрементальные + WAL (7–30d), ежемесячные cold snapshots.
+  - Регулярные тестовые восстановления (smoke restore).
+
+- **Aerospike**
+  - Periodic snapshots (cold backup) + экспорт namespace в S3; обеспечивать согласованные снимки всех нод.
+  - План восстановления: spin-up new cluster, restore snapshots, wait for cluster re-balance.
+
+- **Redis**
+  - RDB snapshots (каждые N минут/изменений) или AOF (если нужна долговечность).
+  - Для сессий — допускается потеря кратковременных данных; комбинировать RDB + реплики.
+  - Сохранять резервные копии на S3.
+
+- **ClickHouse**
+  - Backup партиций в S3 (`BACKUP` / `TABLE ... TO DISK`), реплицированные реплики упрощают восстановление.
+
+- **Kafka**
+  - репликация партиций;
+
+- **Etcd**
+  - Регулярные etcd snapshots (`etcdctl snapshot save`) и хранение в S3; тестовые restore на staging.
+
+- **S3 / Object storage**
+  - Versioning + Lifecycle rules.
+
+### Мультиплексирование подключений
+
+- **PostgreSQL**
+  - Использовать пуллеры: **PgBouncer** (transaction pooling).
+
+- **Redis**
+  - Клиентский пул соединений `go-redis`, reuse connections.
+
+- **Kafka**
+  - Producers/Consumers используют batching, compression и async send для throughput.
+
+## 7. Алгоритмы
 
 TODO
 
