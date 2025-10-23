@@ -676,7 +676,7 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 
 ## 8. Технологии
 
-TODO
+TODO.
 
 ## Источники
 1. https://www.demandsage.com/zoom-statistics/
