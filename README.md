@@ -21,6 +21,8 @@
 
 * [**7. Алгоритмы**](#7-алгоритмы)
 
+* [**8. Технологии**](#8-технологии)
+
 ## 1. Тема, аудитория, функционал
 
 ### Тема
@@ -286,7 +288,7 @@ $$\frac{227701 \cdot 8}{86400} =  21 \space Гбит/с$$
 | Найроби        | 0 / 0        | 0 / 0                | 0 / 0            | 255.3 / 798.5 | 0.42 / 1.24       |
 | Рио-де-Жанейро | 0 / 0        | 0 / 0                | 0 / 0            | 255.3 / 798.5 | 0.42 / 1.24       |
 | Сидней         | 16.7 / 50.0  | 23.3 / 70.1          | 16.7 / 50.0      | 70.7 / 221.5  | 0.12 / 0.35       |
-### Схема балансировки
+### Схема глобальной балансировки
 
 Применяется DNS
 
@@ -513,7 +515,7 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 | **MEETINGS**                  |                                                         `16 (uuid - meeting_id) + 16 (uuid - host_id) + 60 (text - meeting_url) + 8 + 8 + 8 + 8 (timestamps)` = **124 байта / строка** |                     `16 742 770 /день` |  **3.80 ТБ**          (2.08 Гбайт / день)  |
 | **PARTICIPANTS**               |                              `16 (uuid - participant_id) + 16 (uuid - user_id) + 16 (uuid - meeting_id) + 8 (timestamp - joined_at) + 8 (timestamp - left_at)` = **64 байта / строка** |                    `167 427 700 /день` |             **19.56 ТБ** (10.72 Гбайт / день) |
 | **MESSAGES**                       |                                          `16 (uuid - message_id) + 16 (uuid - user_id) + 16 (uuid - meeting_id) + 150 (text - content avg) + 8 (timestamp)` = **206 байт / сообщение** |                     `83 713 850 /день` |              **31.51 ТБ**(17.25 Гбайт / день) |
-| **RECORDINGS **               |                                                        `16 (uuid - recording_id) + 16 (uuid - meeting_id) + 60 (text - file_url) + 8 (timestamp - created_at)` = **100 байт / строка** |                        `227 701 /день` |                 **41.5 ГБ** (22.77 Мбайт / день) |
+| **RECORDINGS**               |                                                        `16 (uuid - recording_id) + 16 (uuid - meeting_id) + 60 (text - file_url) + 8 (timestamp - created_at)` = **100 байт / строка** |                        `227 701 /день` |                 **41.5 ГБ** (22.77 Мбайт / день) |
 | **ANALYTICS**                   |                                                                       `16 (uuid - event_id) + 16 (uuid - meeting_id) + 20 (text - event_type) + 8 (timestamp)` = **60 байт / событие** |                     `83 713 850 /день` |                **9.16 ТБ** (5.02 Гбайт / день) |
 | **SESSIONS**                     |                                                            `16 (uuid - user_id) + 32 (text - token) + 8 (timestamp - expires_at) + 8 (timestamp - created_at)` = **64 байта / сессия** | `600 000 000` (предположение: DAU * 2) |                     **38.40 Гбайт** |
 | **ROOM_REGISTRIES**  |   `16 (uuid - room_id) + 16 (uuid - meeting_id) + 50 (text - media_host) + 4 (int - participant_count) + 10 (text - status) + 8 (timestamp - last_heartbeat)` = **104 байта / запись** |   `~627 854` (оценка concurrent rooms) |                        **65.30 Мбайт** |
@@ -523,7 +525,7 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 | Действие / таблица                 |  Avg W/s | Peak W/s |
 | ---------------------------------- | -------: | -------: |
 | Создание **MEETINGS**              |   193.78 |   581.35 |
-| Join → **PARTICIPANTS** Чтение     | 1 937.82 | 5 813.46 |
+| Join → **PARTICIPANTS** Запись     | 1 937.82 | 5 813.46 |
 | Join → **PARTICIPANTS** Чтение     | 1 937.82 | 5 813.46 |
 | Chat → **MESSAGES** Запись         |   968.91 | 2 906.73 |
 | Запись metadata → **RECORDINGS**   |     2.64 |     7.91 |
@@ -564,12 +566,12 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 | **RECORDINGS**    | **eventual**    | 
 | **ANALYTICS**     | **eventual**    |
 | **SESSIONS**      | **strong**      |
-| **ROOM_REGISTRIES** | **strong**      |
+| **ROOM_REGISTRIES** | **eventual**      |
 
 
 ## 6. Физическая схема БД
 
-![db_diagram](pics/db_diagram.png)
+![ph_db_diagram](pics/ph_db_diagram.jpeg)
 
 | Сущность            | Хранилище                   | Обоснование выбора                                                                                                                                                         |
 | ------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -580,7 +582,7 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 | **MESSAGES**        | Aerospike                   | Высокая скорость вставок и чтений, масштабируемость по chat_id.                                              |
 | **ANALYTICS**       | Kafka → ClickHouse | Kafka обеспечивает доставку событий, ClickHouse — быстрые запросы для дашбордов и KPI.  |
 | **SESSIONS**        | Redis                       | Высокопроизводительное in-memory хранилище для хранения токенов с TTL. Redis Sentinel обеспечивает failover.                                     |
-| **ROOM_REGISTRIES** | Etcd                        | Контролируемый реестр для маршрутизации медиапотоков. Strong consistency критична, Raft обеспечивает согласованность между нодами.                                         |
+| **ROOM_REGISTRIES** | Aerospike                        | Контролируемый реестр для маршрутизации медиапотоков.                                          |
 
 ### Индексирование
 
@@ -588,30 +590,25 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
   - Primary key (по умолчанию).
   - Частые фильтры/поиски:
     - `email` (UNIQUE).
-    - `created_at`, `start_time` — `brin` для очень больших таблиц с временной корреляцией.
   - Составные индексы:
     - `(meeting_id, created_at)` для быстрых выборок событий по встрече и времени.
 
 - **Aerospike (MESSAGES, PARTICIPANTS, RECORDINGS)**
   - Primary key (по умолчанию).
-  - Secondary index (SI) для поиска по `user_id`, `timestamp` (если требуется range-lookup по времени).
+  - Secondary index (SI) для поиска по `timestamp`,`meeting_id`.
 
 ### Шардирование
 
-- **PostgreSQL**
+- **PostgreSQL Citus data**
   - Вертикальное разделение: критичные транзакционные таблицы в PG.
-  - Горизонтальное (при необходимости): `user_id` / `meeting_id` — хэширование; или Citus для автоматического распределения.
-  - Временные таблицы: partition by `created_at` (range) для MEETINGS, упрощает архивирование.
+  - Горизонтальное (при необходимости): `user_id` / `meeting_id` — хэширование.
 
 - **Redis**
   - Redis Cluster — hash slots (16384 slots), распределяются между нодами.
   - Для сессий — consistent hashing по `user_id` или token.
 
 - **ClickHouse**
-  - Partition by `event_date`, распределение по `meeting_id` (shard key) через `Distributed` таблицы.
-
-- **Kafka**
-  - Партиционирование по `meeting_id`/`tenant_id` для порядка сообщений внутри пары (partition).
+  - Партиции по `event_date`, распределение по `meeting_id` (shard key) через `Distributed` таблицы.
 
 
 ### Реплицирование
@@ -623,13 +620,13 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
   - Master + replicas (Redis Sentinel).
 
 - **ClickHouse**
-  - `ReplicatedMergeTree` — репликация на уровне партиций/таблиц;
+  - `ReplicatedMergeTree` — репликация на уровне партиций/таблиц. Click keeper. 3 ноды
 
 - **Kafka**
-  - Репликация партиций между брокерами; `replication.factor >= 2`
+  - Репликация партиций между брокерами; `replication.factor = 3`
   
-- **Etcd**
-  - Raft-репликация; 11 (нечетное число) реплик всего, в каждый медиахост по 1.
+- **Aerospike**
+  - 11 реплик всего.
 
 ### Схема резервного копирования
 
@@ -652,10 +649,7 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
   - Backup партиций в S3 (`BACKUP` / `TABLE ... TO DISK`), реплицированные реплики упрощают восстановление.
 
 - **Kafka**
-  - репликация партиций;
-
-- **Etcd**
-  - Регулярные etcd snapshots (`etcdctl snapshot save`) и хранение в S3; тестовые restore на staging.
+  - репликация партиций.
 
 - **S3 / Object storage**
   - Versioning + Lifecycle rules.
@@ -673,6 +667,15 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 
 ## 7. Алгоритмы
 
+| **Алгоритм**                                         | **Область применения**                   | **Мотивация**                                                                                                                                                                          |
+| ---------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Управление перегрузкой (Congestion Control)**[[6](https://webrtchacks.com/probing-webrtc-bandwidth-probing-why-and-how-in-gcc/)] | WebRTC-конференции    | Адаптация битрейта к состоянию сети (потери пакетов, RTT, джиттер) для обеспечения плавности передачи видео/аудио.                                                                     |
+| **Simulcast**[[7](https://bloggeek.me/webrtcglossary/simulcast/)]                                        | Мультипользовательские конференции (SFU) | Отправка нескольких копий видео с разными уровнями качества; SFU выбирает подходящий поток для каждого участника, что позволяет оптимизировать качество для разных сетевых условий.    |
+| **SVC (Scalable Video Coding)**[[8](https://getstream.io/glossary/scalable-video-coding/)]                      | Мультипользовательские конференции (SFU) | Один поток с несколькими слоями (разрешение, кадровая частота, SNR), что позволяет SFU динамически отбрасывать низкие слои при ухудшении качества сети. Это экономит ресурсы и полосу. |
+| **Opus DTX**[[9](https://getstream.io/resources/projects/webrtc/advanced/dtx/)]                                 | Аудиоконференция                         | Существенная экономия битрейта при тишине (опустошенные шумы) с помощью прерывистой передачи, что упрощает масштабирование крупных звонков.                                            |
+
+## 8. Технологии
+
 TODO
 
 ## Источники
@@ -681,3 +684,7 @@ TODO
 3. https://www.statista.com/statistics/1259936/distribution-of-zoomus-traffic-by-country/
 4. https://www.zoom.com/en/blog/how-you-zoomed-over-the-past-year-2021/?lang=en-US
 5. https://support.zoom.com/hc/ru/article?id=zm_kb&sysparm_article=KB0060759
+6. https://webrtchacks.com/probing-webrtc-bandwidth-probing-why-and-how-in-gcc/
+7. https://bloggeek.me/webrtcglossary/simulcast/
+8. https://getstream.io/glossary/scalable-video-coding/
+9. https://getstream.io/resources/projects/webrtc/advanced/dtx/
