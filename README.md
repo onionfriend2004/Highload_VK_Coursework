@@ -724,22 +724,18 @@ $O(b \times \log_b n) = O(\log n)$ операций хеширования на 
 #### Агрегация весов
 
 * **Листовой узел (физический сервер):**  
-$$
-weight(\text{host}) = capacity - load - penalties
-$$
+
+$$weight(\text{host}) = capacity - load - penalties$$
 
 * **Внутренний узел:**  
-$$
-weight(\text{node}) = \sum_{child \in children} weight(child)
-$$
+
+$$weight(\text{node}) = \sum_{child \in children} weight(child)$$
 
 #### Формальное определение алгоритма
 
 Базовый механизм Rendezvous hashing:
 
-$$
-score(\text{room}, \text{host}) = H(\text{roomID}, \text{hostID}) \cdot weight(\text{host})
-$$
+$$score(\text{room}, \text{host}) = H(\text{roomID}, \text{hostID}) \cdot weight(\text{host})$$
 
 где $H$ — детерминированная хеш-функция (например, xxHash),  
 $weight(\text{host})$ — функция доступной емкости.
