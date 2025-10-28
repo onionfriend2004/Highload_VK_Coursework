@@ -23,7 +23,7 @@
 
 * [**8. Технологии**](#8-технологии)
 
-* [**9. Обеспечение надёжности**](#9-обеспечение-надёжности)
+* [**9. Обеспечение надежности**](#9-обеспечение-надежности)
 
 ## 1. Тема, аудитория, функционал
 
@@ -713,7 +713,7 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 1. Начинаем с корневого узла дерева  
 2. На каждом уровне вычисляем score для всех дочерних узлов:
    $$
-   score(\text{room}, \text{child}) = H(\text{room\_id}, \text{child\_id}) \cdot weight(\text{child})
+   score(\text{room}, \text{child}) = H(\text{roomID}, \text{childID}) \cdot weight(\text{child})
    $$  
 3. Выбираем дочерний узел с максимальным score  
 4. Рекурсивно повторяем шаги 2–3 до достижения листового узла (физического сервера)
@@ -738,7 +738,7 @@ $O(b \times \log_b n) = O(\log n)$ операций хеширования на 
 Базовый механизм Rendezvous hashing:
 
 $$
-score(\text{room}, \text{host}) = H(\text{room\_id}, \text{host\_id}) \cdot weight(\text{host})
+score(\text{room}, \text{host}) = H(\text{roomID}, \text{hostID}) \cdot weight(\text{host})
 $$
 
 где $H$ — детерминированная хеш-функция (например, xxHash),  
@@ -789,7 +789,7 @@ $weight(\text{host})$ — функция доступной емкости.
 | **Kubernetes**                             | Оркестрация микросервисов                                                          | Автомасштабирование SFU и backend-сервисов под нагрузку, self-healing, управление rollout-ами.                                                     |
 | **VictoriaMetrics** | Мониторинг и алертинг                                                              | Отслеживание задержек, качества медиапотока, загрузки SFU.                                                    |
 
-## 9. Обеспечение надёжности
+## 9. Обеспечение надежности
 
 TODO
 
