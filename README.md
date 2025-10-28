@@ -724,14 +724,14 @@ $O(b \times \log_b n) = O(\log n)$ операций хеширования на 
 #### Агрегация весов
 
 * **Листовой узел (физический сервер):**  
-  $$
-  weight(\text{host}) = capacity - load - penalties
-  $$
+$$
+weight(\text{host}) = capacity - load - penalties
+$$
 
 * **Внутренний узел:**  
-  $$
-  weight(\text{node}) = \sum_{child \in children} weight(child)
-  $$
+$$
+weight(\text{node}) = \sum_{child \in children} weight(child)
+$$
 
 #### Формальное определение алгоритма
 
