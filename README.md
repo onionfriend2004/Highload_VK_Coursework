@@ -713,9 +713,7 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 1. Начинаем с корневого узла дерева  
 2. На каждом уровне вычисляем score для всех дочерних узлов:
 
-   $$
-   score(\text{room}, \text{child}) = H(\text{roomID}, \text{childID}) \cdot weight(\text{child})
-   $$
+   $$score(\text{room}, \text{child}) = H(\text{roomID}, \text{childID}) \cdot weight(\text{child})$$
    
 4. Выбираем дочерний узел с максимальным score  
 5. Рекурсивно повторяем шаги 2–3 до достижения листового узла (физического сервера)
