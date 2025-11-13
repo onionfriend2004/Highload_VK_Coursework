@@ -847,7 +847,7 @@ $weight(\text{host})$ — функция доступной емкости.
 
 ![service_diagram](pics/zoom_service_diagram.png)
 
-*Здесь и далее приняты следующие обозначения:*
+*Обозначения:*
 
 ![symbols](pics/symbols.png)
 
