@@ -299,7 +299,6 @@ $$\frac{227701 \cdot 8}{86400} =  21 \space Гбит/с$$
 Применяется DNS
 
 #### Схема DNS-балансировки
-1. Управляющие
 
 ```mermaid
 flowchart LR
@@ -311,58 +310,22 @@ flowchart LR
     %% Регион 1
     subgraph "Регион 1"
         R1 --> LB1[L7]
-        LB1 --> P1[БД]
     end
 
     %% Регион 2
     subgraph "Регион 2"
         R2 --> LB2[L7]
-        LB2 --> P2[БД]
     end
 
     %% Регион 3 (Failover)
     subgraph "Регион 3 (Failover)"
         R3 --> LB3[L7]
-        LB3 --> P3[БД]
     end
 ```
-
-2. Медиа хосты
-
-```mermaid
-flowchart LR
-    U[Пользователь] --> D[GeoDNS]
-    D -->|по региону / нагрузке| R1[Регион 1]
-    D -->|по региону / нагрузке| R2[Регион 2]
-    D -->|резерв| R3[Регион 3]
-
-    %% Регион 1
-    subgraph "Регион 1"
-        R1 --> In1[L7 Load Balancer]
-        In1 --> CP1[Control Plane: Auth / Metadata / Scheduling]
-        In1 --> Media1[Media Requests → Media Servers]
-    end
-
-    %% Регион 2
-    subgraph "Регион 2"
-        R2 --> In2[L7 Load Balancer]
-        In2 --> CP2[Control Plane: Auth / Metadata / Scheduling]
-        In2 --> Media2[Media Requests → Media Servers]
-    end
-
-    %% Регион 3 (Failover)
-    subgraph "Регион 3 (Failover)"
-        R3 --> In3[L7 Load Balancer]
-        In3 --> CP3[Control Plane: Auth / Metadata / Scheduling]
-        In3 --> Media3[Media Requests → Media Servers]
-    end
-```
-
 
 Geo-based DNS — направляет трафик в ближайший регион.
 
 ## 4. Локальная балансировка нагрузки
-
 
 ### Схема локальной балансировки нагрузки
 
@@ -373,138 +336,76 @@ flowchart LR
     end
 
     subgraph EDGE["Edge Layer"]
-        I["L7 Load Balancer"]
         D["GeoDNS"]
+        N["Edge L7"]
+        AG["API Gateway"]
     end
 
-    subgraph CONTROL["Control Plane"]
-        C["Room Registry / Load Manager"]
+    subgraph CORE["Core Services"]
+        MS["Meeting Service"]
+        CP["Control Plane"]
+    end
+
+    subgraph STORAGE["Metadata Storage"]
+        A["room/participant registry"]
     end
 
     subgraph MEDIA["Media Layer (SFU)"]
-        M["Media Host"]
-        H["Service Mesh Health Monitor"]
+        M["Media Host (SFU)"]
+        HM["Health Monitor / Mesh"]
     end
 
-    %% Signaling path (HTTP/WSS)
-    U --> D --> I --> C
-    C --> I --> U
+    %% Signaling
+    U --> D --> N --> AG --> MS
+    MS --> CP
+    CP --> AG --> U
 
-    %% Media path (UDP/WebRTC)
-    U -. UDP/WebRTC .-> M
+    %% Storage
+    CP --> A
+    A --> CP
 
-    %% Control & health
-    M --> C
-    H --> C
-    C -.-> H
+    %% Media path
+    U -. WebRTC/UDP .-> M
+
+    %% Health
+    M --> HM --> CP
 ```
 
 ### Процесс маршрутизации
 
-#### 1. Подключение клиента
-1. Клиент подключается к **L7-балансировщику** регионального дата-центра.  
-2. L7 проксирует signaling-запрос в **Control Plane** региона.  
-3. Control Plane выбирает оптимальный **media-host** с учётом загрузки, доступности и закрепления комнаты.  
-4. Control Plane возвращает L7-балансировщику адрес выбранного media-host.  
-5. L7-балансировщик отдаёт клиенту адрес media-host.  
-6. Клиент устанавливает прямое **WebRTC/UDP** соединение с media-host.  
-7. Media-host регистрирует участника в реестре (`room_id → media_host`).  
+#### Создание новой комнаты
+1. Клиент → L7 → Meeting Service.
+2. Meeting Service создаёт запись.
+3. Meeting Service вызывает Control Plane:
+→ “Комната создана, назначь media-host”.
+4. Control Plane выбирает SFU и пишет в бд:
+room_id → media_host
+5. Meeting Service возвращает клиенту ссылку на подключение.
+6. На клиенте комната готова для подключения.
 
-### Создание новой комнаты
-1. Клиент/сервер отправляет запрос на создание комнаты в Control Plane.  
-2. Control Plane выбирает media-host по политике размещения и текущей загрузке.  
-3. В реестр записывается соответствие `room_id → media_host`.  
-4. Control Plane выдаёт адрес media-host и токен доступа.  
-5. Участники подключаются через L7-балансировщик → media-host.
+#### Присоединение к существующей комнате
+1. Клиент делает Join Room → L7 → Meeting Service.
+2. Meeting Service делает запрос в Control Plane:
+“Куда отправить участника room_id?”
+3. Control Plane читает из Aerospike:
+media_host = registry[room_id]
+4. Control Plane возвращает клиенту адрес SFU + signaling endpoint + токен.
+5. Дальше клиент сам устанавливает WebRTC на SFU.
 
-### Присоединение к существующей комнате
-1. Клиент отправляет запрос Join с `room_id` на L7 → Control Plane.  
-2. Control Plane читает из реестра `room_id → media_host`.  
-3. L7 возвращает клиенту адрес media-host.  
-4. Клиент подключается напрямую к media-host; connection tracking удерживает хост.
+#### Отказ и failover
+1. Health Monitor фиксирует, что media-host недоступен.
+2. Control Plane помечает SFU как down и обновляет запись room_id → new_media_host.
+3. Клиент обнаруживает обрыв WebRTC/WS соединения.
+4. Клиент выполняет повторный запрос Join Room → L7 → Meeting Service.
+5. Meeting Service проверяет комнату и участника, запрашивает Control Plane.
+6. Control Plane возвращает новый media-host + токен + ICE/TURN.
+7. Клиент устанавливает новое WebRTC соединение с назначенным SFU.
 
-### Отказ и failover
-1. Mesh обнаруживает, что media-host unhealthy.  
-2. Control Plane помечает его как недоступный и обновляет реестр.  
-3. Новые подключения направляются на другие media-host'ы.  
-4. Активные комнаты мигрируют:
-   - либо участникам отправляется сигнал на reconnect,  
-   - либо комната переносится на резервный инстанс.  
-5. При отказе всего региона GeoDNS переводит трафик на соседний регион.
 **Формула резервирования оборудования:**
 
 $$
-N_\text{резерв} = \frac{N \times 2}{N + 1}
+N_\text{серверов} = N_\text{baseline} + 1
 $$
-
-где:
-
-* $N$ — количество основных экземпляров;
-* $N_\text{резерв}$ — количество резервных серверов/балансировщиков.
-
-### Расчет количества балансировщиков
-
-$$
-\text{BW}_\text{балансировщика} = \text{RPS}_\text{пик} \times \text{размер запроса (ГБ)} \times 8\ (\text{Гбит/с})
-$$
-
-#### Результат L7 для медиатрафика
-
-Общий пиковый медиатрафик 5211 Gbit/s делим между DC пропорционально присоединениям.
-
-*Сумма всех peak `Присоединение` = 6668 RPS.*
-
-Для каждого DC:
-1. Доля = `join_peak_DC / 6668`
-2. BW_med_DC = 5211 Gbit/s * доля
-3. N_baseline = ceil(BW_med_DC / 80) 
-4. N_reserve = ceil((N_baseline * 2) / (N_baseline + 1))
-5. N_total = N_baseline + N_reserve
-
-| Дата-центр     | Присоединение (RPS) | baseline (N) | резерв | всего |
-|----------------|----------------:|-----------------:|-----------:|---------:|
-| Сан-Франциско  | 883.4           |9                | 2          | **11**   |
-| Нью-Йорк       | 883.4           | 9                | 2          | **11**   |
-| Канзас-Сити    | 0.0             |  0.0                   | 0                | 0          | **0**    |
-| Лондон         | 221.5           |3                | 2          | **5**    |
-| Франкфурт      | 798.5           |8                | 2          | **10**   |
-| Токио          | 244.2           | 3                | 2          | **5**    |
-| Мумбаи         | 221.5           | 3                | 2          | **5**    |
-| Астана         | 798.5           | 8                | 2          | **10**   |
-| Сингапур       | 798.5           |  8                | 2          | **10**   |
-| Найроби        | 798.5           | 8                | 2          | **10**   |
-| Рио-де-Жанейро | 798.5           |  8                | 2          | **10**   |
-| Сидней         | 221.5           | 3                | 2          | **5**    |
-
-**Итого:**  
-* Baseline суммарно ≈ **70** инстансов (сумма baseline по DC)  
-* С учетом резервов — суммарно ≈ **92** инстанса
-
-#### Расчёт L7 для запросов к БД
-
-$$
-BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS_{peak} \times 8.192\cdot10^{-5}$$
-
-Один L7-инстанс (NIC 10G, U=80%) → eff = 8 Гбит/с.
-
-
-| Дата-центр     | RPS            | BW (Гбит/с) | L7 baseline N | L7 резерв           | L7 итого |
-|----------------|---------------:|-------------------------------:|--------------:|--------------------:|---------:|
-| Сан-Франциско  | 0.00           | 0.00000                         | 0             | 0                   | 0        |
-| Нью-Йорк       | 0.00           | 0.00000                         | 0             | 0                   | 0        |
-| Канзас-Сити  | 678.20     | 0.05556                     | 1             | 1                   | 2    |
-| Лондон     | 170.10     | 0.01393                    | 1             | 1                   | 2    |
-| Франкфурт      | 0.00           | 0.00000                         | 0             | 0                   | 0        |
-| Токио      | 187.70     | 0.01537                   | 1             | 1                   | 2    |
-| Мумбаи     | 170.10     | 0.01393                     | 1             | 1                   | 2    |
-| Астана         | 0.00           | 0.00000                         | 0             | 0                   | 0        |
-| Сингапур       | 0.00           | 0.00000                         | 0             | 0                   | 0        |
-| Найроби        | 0.00           | 0.00000                         | 0             | 0                   | 0        |
-| Рио-де-Жанейро | 0.00           | 0.00000                         | 0             | 0                   | 0        |
-| Сидней     | 170.10     | 0.01393                     | 1             | 1                   | 2    |
-
-**Итого:** 
-* 5 дата-центров × 2 = 10 инстансов.
 
 ## 5. Логическая схема БД
 
@@ -523,16 +424,16 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 | **SESSIONS**                     |                                                            `16 (uuid - user_id) + 32 (text - token) + 8 (timestamp - expires_at) + 8 (timestamp - created_at)` = **64 байта / сессия** | `600 000 000` (предположение: DAU * 2) |                     **38.40 Гбайт** |
 | **ROOM_REGISTRIES**  |   `16 (uuid - room_id) + 16 (uuid - meeting_id) + 50 (text - media_host) + 4 (int - participant_count) + 10 (text - status) + 8 (timestamp - last_heartbeat)` = **104 байта / запись** |   `~627 854` (оценка concurrent rooms) |                        **65.30 Мбайт** |
 
-
 ### RPS / QPS
-| Действие / таблица                 |  Avg W/s | Peak W/s |
-| ---------------------------------- | -------: | -------: |
-| Создание **MEETINGS**              |   193.78 |   581.35 |
-| Join → **PARTICIPANTS** Запись     | 1 937.82 | 5 813.46 |
-| Join → **PARTICIPANTS** Чтение     | 1 937.82 | 5 813.46 |
-| Chat → **MESSAGES** Запись         |   968.91 | 2 906.73 |
-| Запись metadata → **RECORDINGS**   |     2.64 |     7.91 |
-| Analytics → **ANALYTICS**  events  |   968.91 | 2 906.73 |
+| Таблица / Действие | Чтение (avg / peak) | Запись (avg / peak) |
+| ------------------ | ------------------: | ------------------: |
+| MEETINGS           |       1 938 / 5 813 |           194 / 581 |
+| PARTICIPANTS       |       19 378 / 58 135 |       1 938 / 5 813 |
+|        MESSAGES |      9 689 / 29 067 |         969 / 2 907 |
+| RECORDINGS         |         0.26 / 0.78 |         2.64 / 7.91 |
+|       ANALYTICS |            97 / 291 |         969 / 2 907 |
+|        SESSIONS |      4 207 / 12 621 |           135 / 405 |
+| ROOM_REGISTRIES |       1 938 / 5 813 |    1 938 / 5 813 |
 
 ### Резюме
 
@@ -613,16 +514,14 @@ BW_{Gbit} = RPS_{peak} \times 10{,}240\ \text{bytes} \times 8 / 10^9 \approx RPS
 ### Реплицирование
 
 - **PostgreSQL**
-  - Primary → replica (streaming replication). 1 master, 4 реплики.
+  - Primary → replica (streaming replication).
 
 - **ClickHouse**
   - `ReplicatedMergeTree` — репликация на уровне партиций/таблиц. Click keeper. 3 ноды
 
 - **Kafka**
   - Репликация партиций между брокерами; `replication.factor = 3`
-  
-- **Aerospike**
-  - 11 реплик всего.
+
 
 ### Схема резервного копирования
 
@@ -835,6 +734,115 @@ $weight(\text{host})$ — функция доступной емкости.
 
 ## 11. Расчёт ресурсов
 
+### Хранилища
+
+На основе расчетов, проведенных в [5 части работы](#5-логическая-схема-бд) относительно нагрузок на чтение и запись и необходимого объема данных в используемых хранилищах, а также [части 2](#2-расчёт-нагрузки) с расчетом используемого сетевого трафика, приведем следующую таблицу:
+
+| Хранилище  | Объём данных | Запись RPS (peak) | Чтение RPS (peak) | Трафик      |
+| ---------- | ------------ | ----------------: | ----------------: | ----------- |
+| PostgreSQL | 3.80 ТБ      |               581 |             1 938 | ~16 Мбит/с  |
+| Aerospike  | 51.55 ТБ     |             8 720 |            87 202 | ~421 Мбит/с |
+| ClickHouse | 9.16 ТБ      |             2 907 |               291 | ~0.4 Мбит/с |
+| Amazon S3  | 6.9 ПБ       |              7.91 |              0.78 | ~22 Гбит/с  |
+
+### Сервисы
+
+| Сервис           | RPS (peak)           | Трафик                              |
+| ---------------- | -------------------- | ----------------------------------- |
+| API Gateway      | 7056                 | <1 Гбит/с                          |
+| User             | 7056                  | <1 Гбит/с                           |
+| Meeting          | 6237                 | <1 Гбит/с                          |
+| Message    | 405                  | <1 Гбит/с                           |
+| Control plane    | 6642                  | <1 Гбит/с                           |
+| Media host (SFU) | —      | 4.8 Тбит/с video + 348 Гбит/с audio |
+| File creator     | 9                    | 61 Гбит/с                           |
+
+
+
+### Необходимые ресурсы
+
+#### Результат L7
+
+Согласно тестам [[10](https://blog.nginx.org/blog/testing-the-performance-of-nginx-and-nginx-plus-web-servers)], сервер Nginx с 16 CPU способен держать $6\space 676$ HTTPS подключений в секунду (CPS). Такая же конфигурация способна обрабатывать $383\space  860$ RPS по HTTPS в случае, если на каждый запрос приходятся по 10 Кбайт данных. Таким образом, если принять, что $RPS_{APIGateway}=RPS_{Nginx}$, то нам будет достаточно одного сервера для обслуживания внешних HTTPS запросов. В [части 3](#3-глобальная-балансировка-нагрузки) были выбраны 5 управляющих дата-центра по всему миру. При равномерном распределении нагрузки на дата-центр будет приходится $\frac{7056}{5}\approx 1411$ RPS, "проходящих" через Nginx. Согласно тестам [[10](https://blog.nginx.org/blog/testing-the-performance-of-nginx-and-nginx-plus-web-servers)], сервер Nginx с 4 CPU способен держать $1\space 735$ HTTPS подключений в секунду (CPS). Таким образом, если принять, что $RPS_{APIGateway}=RPS_{Nginx}$, то нам будет достаточно одного сервера для обслуживания внешних HTTPS запросов. Каждому дата-центру будет достаточно одного экземпляра Nginx. С учетом резервирования возьмем 2.
+
+Имеем:
+
+|Сервис     |CPU|Network    |Количество|
+|-----------|---|-----------|----------|
+|Nginx      |4  |0.5 Гбайт/c|10        |
+|API Gateway|4  |0.5 Гбайт/c|10        |
+
+#### Go сервисы
+
+Для производительности сервисов на Go положим:
+
+* 1 ядро CPU = 500 RPS и 50 Кбайт RAM/запрос (легкая бизнес-логика - далее "Л")
+* 1 ядро CPU = 100 RPS и 500 Кбайт RAM/запрос (средняя бизнес-логика - далее "С")
+* 1 ядро CPU/(1000 потоков) и 50 Мбайт RAM/(1000 потоков) (тяжелая бизнес-логика - далее "Т")
+
+| Сервис           | Пиковый RPS | CPU, требуемое | RAM, ГБ | Сложность |
+| ---------------- | ----------- | -------------- | ------- | --------- |
+| API Gateway      | 7056        | 15             | 3.5     | Л         |
+| User             | 7056        | 15             | 3.5     | Л         |
+| Meeting          | 6237        | 63             | 3.1     | С         |
+| Message          | 405         | 5              | 0.2     | С         |
+| Control plane    | 6642        | 14             | 0.33    | Л         |
+| File creator     | 9           | 1              | 0.01    | Т         |
+
+| Сервис           | Кол-во потоков | CPU, требуемое | RAM, ГБ | Сложность |
+| ---------------- | -------------- | -------------- | ------- | --------- |
+| Media host (SFU) | 6 280 000      | 6 280          | 314     | Т         |
+| File creator | 85 630         | 86             | 4.3     | Т         |
+
+
+#### Хранилища
+
+#### PostgreSQL
+
+Согласно расчетам, нагрузка на сервера PostgreSQL составляет:
+- **Запись:** 581 RPS (пиковая)
+- **Чтение:** 1 938 RPS (пиковая)
+- **Общий TPS:** ≈ 2 519 TPS
+
+Исходя из того, что одна машина с 2 CPU и 4 Гбайта RAM выдерживает около 5 000 TPS, для текущей нагрузки достаточно одного инстанса. Однако для обеспечения отказоустойчивости и будущего масштабирования возьмем конфигурацию с репликацией: 1 Master- и 2 Slave-инстанса.
+
+#### Aerospike
+
+- **Запись:** 8 720 RPS
+- **Чтение:** 87 202 RPS  
+- **Объем данных:** 51.55 ТБ
+
+Согласно официальной документации Aerospike [[9](https://aerospike.com/blog/new-aerospike-benchmark-demonstrates-real-time-performance-at-petabyte-scale)], для такой нагрузки потребуется инстанс с 8 CPU и 64 Гбайт RAM. Для обеспечения производительности и отказоустойчивости возьмем кластер из 3 нод с дисками по 20 ТБ каждая (с запасом).
+
+#### ClickHouse
+
+Аналитическая нагрузка:
+- **Вставка из очереди:** 1 в день
+- **Чтение:** 291 RPS
+- **Объем данных:** 9.16 ТБ
+
+Описанная нагрузка не является существенной для ClickHouse. Для обработки текущих объемов достаточно конфигурации с 4 CPU cores и 32 Гбайт RAM. Для обеспечения отказоустойчивости возьмем кластер из 2 нод с дисками по 12 ТБ каждая.
+
+### Итого
+
+Составим резюме для всех вышеприведенных расчетов в виде следующей сводной таблицы:
+
+| Сервис / роль                         | CPU (cores) | RAM (ГБ) | NVMe (ТБ) | Кол-во серверов |
+| ------------------------------------- | ----------- | -------- | --------- | --------------- |
+| **Nginx (Ingress)**                   | 4           | 16       | 0.5       | 10              |
+| **API Gateway**                       | 4           | 16       | 0.5       | 10              |
+| **User**                              | 8           | 8        | 0.5       | 15              |
+| **Meeting**                           | 64          | 32       | 0.5       | 63              |
+| **Message**                           | 5           | 4        | 0.5       | 5               |
+| **Control Plane**                     | 14          | 4        | 0.5       | 14              |
+| **File Creator**                      | 1           | 1        | 0.5       | 1               |
+| **Media Host (SFU)**                  | 32          | 128      | 1         | 196             |
+| **PostgreSQL**                        | 4           | 16       | 1         | 3               |
+| **Core Aerospike (global store)**     | 8           | 64       | 40        | 6               |
+| **Edge Aerospike (региональный кэш)** | 4           | 32       | 2         | 36              |
+| **ClickHouse**                        | 4           | 32       | 12        | 2               |
+
+
 ## Источники
 1. https://www.demandsage.com/zoom-statistics/
 2. https://www.marketingscoop.com/blog/zoom-monthly-active-users-the-ultimate-guide-2024/
@@ -844,3 +852,5 @@ $weight(\text{host})$ — функция доступной емкости.
 6. https://webrtchacks.com/probing-webrtc-bandwidth-probing-why-and-how-in-gcc/
 7. https://getstream.io/glossary/scalable-video-coding/
 8. https://getstream.io/resources/projects/webrtc/advanced/dtx/
+9. https://aerospike.com/blog/new-aerospike-benchmark-demonstrates-real-time-performance-at-petabyte-scale
+10. https://blog.nginx.org/blog/testing-the-performance-of-nginx-and-nginx-plus-web-servers
