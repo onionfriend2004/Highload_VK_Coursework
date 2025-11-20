@@ -827,7 +827,7 @@ $weight(\text{host})$ — функция доступной емкости.
 
 Составим резюме для всех вышеприведенных расчетов в виде следующей сводной таблицы:
 
-| Сервис / роль                         | CPU (cores) | RAM (ГБ) | NVMe (ТБ) | Кол-во серверов |
+| Сервис                         | CPU (cores) | RAM (ГБ) | NVMe (ТБ) | Кол-во серверов |
 | ------------------------------------- | ----------- | -------- | --------- | --------------- |
 | **Nginx**                   | 4           | 16       | 0.5       | 10              |
 | **API Gateway**                       | 4           | 16       | 0.5       | 10              |
@@ -841,7 +841,7 @@ $weight(\text{host})$ — функция доступной емкости.
 | **Aerospike**     | 8           | 64       | 20        | 33               |
 | **ClickHouse**                        | 4           | 32       | 12        | 2               |
 
-| Сервис.              | Где разворачиваем |
+| Сервис               | Где разворачиваем |
 | -------------------- | ----------------- |
 | **Nginx**            | Kubernetes        |
 | **API Gateway**      | Kubernetes        |
@@ -862,7 +862,26 @@ $weight(\text{host})$ — функция доступной емкости.
 
 На aws [[12](https://calculator.aws/#/createCalculator/S3)]
 
+На Digital ocean [[13](https://cloud.digitalocean.com/kubernetes/clusters/new?i=3777d7)]
 
+| Сервис               | Цена за месяц     |
+| -------------------- | ----------------- |
+| **Nginx**            |   $480       |
+| **API Gateway**      |   $480      |
+| **User**             |   $1350      |
+| **Meeting**          |   $63k      |
+| **Message**          |   $200      |
+| **Control Plane**    |   $1344      |
+| **File Creator**     |   $12      |
+| **Media Host (SFU)** |   $41.8k      |
+| **PostgreSQL**       |   $111      |
+| **Aerospike**        |   $3102      |
+| **ClickHouse**       |   $120      |
+| **S3**               |  $149к           |
+
+Итоговая цена: 
+
+$261000 в месяц
 
 ## Источники
 1. https://www.demandsage.com/zoom-statistics/
@@ -877,3 +896,4 @@ $weight(\text{host})$ — функция доступной емкости.
 10. https://aerospike.com/blog/new-aerospike-benchmark-demonstrates-real-time-performance-at-petabyte-scale
 11. https://www.hetzner.com/dedicated-rootserver/
 12. https://calculator.aws/#/createCalculator/S3
+13. https://cloud.digitalocean.com/kubernetes/clusters/new?i=3777d7
