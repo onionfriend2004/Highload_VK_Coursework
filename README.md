@@ -763,7 +763,7 @@ $weight(\text{host})$ — функция доступной емкости.
 
 #### Результат L7
 
-Согласно тестам [[10](https://blog.nginx.org/blog/testing-the-performance-of-nginx-and-nginx-plus-web-servers)], сервер Nginx с 16 CPU способен держать $6\space 676$ HTTPS подключений в секунду (CPS). Такая же конфигурация способна обрабатывать $383\space  860$ RPS по HTTPS в случае, если на каждый запрос приходятся по 10 Кбайт данных. Таким образом, если принять, что $RPS_{APIGateway}=RPS_{Nginx}$, то нам будет достаточно одного сервера для обслуживания внешних HTTPS запросов. В [части 3](#3-глобальная-балансировка-нагрузки) были выбраны 5 управляющих дата-центра по всему миру. При равномерном распределении нагрузки на дата-центр будет приходится $\frac{7056}{5}\approx 1411$ RPS, "проходящих" через Nginx. Согласно тестам [[10](https://blog.nginx.org/blog/testing-the-performance-of-nginx-and-nginx-plus-web-servers)], сервер Nginx с 4 CPU способен держать $1\space 735$ HTTPS подключений в секунду (CPS). Таким образом, если принять, что $RPS_{APIGateway}=RPS_{Nginx}$, то нам будет достаточно одного сервера для обслуживания внешних HTTPS запросов. Каждому дата-центру будет достаточно одного экземпляра Nginx. С учетом резервирования возьмем 2.
+Согласно тестам [[9](https://blog.nginx.org/blog/testing-the-performance-of-nginx-and-nginx-plus-web-servers)], сервер Nginx с 16 CPU способен держать $6\space 676$ HTTPS подключений в секунду (CPS). Такая же конфигурация способна обрабатывать $383\space  860$ RPS по HTTPS в случае, если на каждый запрос приходятся по 10 Кбайт данных. Таким образом, если принять, что $RPS_{APIGateway}=RPS_{Nginx}$, то нам будет достаточно одного сервера для обслуживания внешних HTTPS запросов. В [части 3](#3-глобальная-балансировка-нагрузки) были выбраны 5 управляющих дата-центра по всему миру. При равномерном распределении нагрузки на дата-центр будет приходится $\frac{7056}{5}\approx 1411$ RPS, "проходящих" через Nginx. Согласно тестам [[9](https://blog.nginx.org/blog/testing-the-performance-of-nginx-and-nginx-plus-web-servers)], сервер Nginx с 4 CPU способен держать $1\space 735$ HTTPS подключений в секунду (CPS). Таким образом, если принять, что $RPS_{APIGateway}=RPS_{Nginx}$, то нам будет достаточно одного сервера для обслуживания внешних HTTPS запросов. Каждому дата-центру будет достаточно одного экземпляра Nginx. С учетом резервирования возьмем 2.
 
 Имеем:
 
@@ -812,7 +812,7 @@ $weight(\text{host})$ — функция доступной емкости.
 - **Чтение:** 87 202 RPS  
 - **Объем данных:** 51.55 ТБ
 
-Согласно официальной документации Aerospike [[9](https://aerospike.com/blog/new-aerospike-benchmark-demonstrates-real-time-performance-at-petabyte-scale)], для такой нагрузки потребуется инстанс с 8 CPU и 64 Гбайт RAM. Для обеспечения производительности и отказоустойчивости возьмем кластер из 3 нод с дисками по 20 ТБ каждая (с запасом).
+Согласно официальной документации Aerospike [[10](https://aerospike.com/blog/new-aerospike-benchmark-demonstrates-real-time-performance-at-petabyte-scale)], для такой нагрузки потребуется инстанс с 8 CPU и 64 Гбайт RAM. Для обеспечения производительности и отказоустойчивости возьмем кластер из 3 нод с дисками по 20 ТБ каждая.
 
 #### ClickHouse
 
@@ -829,18 +829,39 @@ $weight(\text{host})$ — функция доступной емкости.
 
 | Сервис / роль                         | CPU (cores) | RAM (ГБ) | NVMe (ТБ) | Кол-во серверов |
 | ------------------------------------- | ----------- | -------- | --------- | --------------- |
-| **Nginx (Ingress)**                   | 4           | 16       | 0.5       | 10              |
+| **Nginx**                   | 4           | 16       | 0.5       | 10              |
 | **API Gateway**                       | 4           | 16       | 0.5       | 10              |
 | **User**                              | 8           | 8        | 0.5       | 15              |
 | **Meeting**                           | 64          | 32       | 0.5       | 63              |
 | **Message**                           | 5           | 4        | 0.5       | 5               |
-| **Control Plane**                     | 14          | 4        | 0.5       | 14              |
+| **Control Plane**                     | 11          | 4        | 0.5       | 14              |
 | **File Creator**                      | 1           | 1        | 0.5       | 1               |
-| **Media Host (SFU)**                  | 32          | 128      | 1         | 196             |
-| **PostgreSQL**                        | 4           | 16       | 1         | 3               |
-| **Core Aerospike (global store)**     | 8           | 64       | 40        | 6               |
-| **Edge Aerospike (региональный кэш)** | 4           | 32       | 2         | 36              |
+| **Media Host (SFU)**                  | 32          | 128      | 1         | 200             |
+| **PostgreSQL**                        | 4           | 16       | 5         | 3               |
+| **Aerospike**     | 8           | 64       | 20        | 33               |
 | **ClickHouse**                        | 4           | 32       | 12        | 2               |
+
+| Сервис.              | Где разворачиваем |
+| -------------------- | ----------------- |
+| **Nginx**            | Kubernetes        |
+| **API Gateway**      | Kubernetes        |
+| **User**             | Kubernetes        |
+| **Meeting**          | Kubernetes        |
+| **Message**          | Kubernetes        |
+| **Control Plane**    | Kubernetes        |
+| **File Creator**     | Kubernetes        |
+| **Media Host (SFU)** | Bare Metal        |
+| **PostgreSQL**       | Bare Metal        |
+| **Aerospike**        | Bare Metal        |
+| **ClickHouse**       | Bare Metal        |
+| **S3**               | Cloud             |
+
+### Расчет цены
+
+На hetzner [[11](https://www.hetzner.com/dedicated-rootserver/)]
+
+На aws [[12](https://calculator.aws/#/createCalculator/S3)]
+
 
 
 ## Источники
@@ -852,5 +873,7 @@ $weight(\text{host})$ — функция доступной емкости.
 6. https://webrtchacks.com/probing-webrtc-bandwidth-probing-why-and-how-in-gcc/
 7. https://getstream.io/glossary/scalable-video-coding/
 8. https://getstream.io/resources/projects/webrtc/advanced/dtx/
-9. https://aerospike.com/blog/new-aerospike-benchmark-demonstrates-real-time-performance-at-petabyte-scale
-10. https://blog.nginx.org/blog/testing-the-performance-of-nginx-and-nginx-plus-web-servers
+9. https://blog.nginx.org/blog/testing-the-performance-of-nginx-and-nginx-plus-web-servers
+10. https://aerospike.com/blog/new-aerospike-benchmark-demonstrates-real-time-performance-at-petabyte-scale
+11. https://www.hetzner.com/dedicated-rootserver/
+12. https://calculator.aws/#/createCalculator/S3
