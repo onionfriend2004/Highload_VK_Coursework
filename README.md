@@ -878,10 +878,7 @@ $weight(\text{host})$ — функция доступной емкости.
 | **Aerospike**        |   $3102      |
 | **ClickHouse**       |   $120      |
 | **S3**               |  $149к           |
-
-Итоговая цена: 
-
-$261000 в месяц
+| **Итого**               |  $261000           |
 
 ## Источники
 1. https://www.demandsage.com/zoom-statistics/
